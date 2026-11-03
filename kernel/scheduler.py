@@ -7,32 +7,31 @@ from kernel.telemetry import StatorGovernor
 logger = logging.getLogger("AsyncCoreSync")
 
 async def async_stator_consumer_core(wire_queue: asyncio.Queue, stop_event: asyncio.Event, stats: dict):
-    """Processes incoming data blocks using null-point egress handshakes."""
-    logger.info("=== INITIALIZING GEOMETRIC ZERO-INTERRUPT NIC DRIVER ===")
+    """Processes incoming data blocks using geometric wave minima gates."""
+    logger.info("=== INITIALIZING HARMONIC ZERO-INTERRUPT NIC DRIVER ===")
     driver_state = DriverState()
-    milestones = {1, 2500, 3334, 4999, 5000, 5001, 5002, 6667, 10000}
     
+    # Track when a handshake is actively occurring across steps
+    handshake_in_progress = False
+
     for step in range(1, 10001):
-        # 1. Drain the asynchronous pipeline queue into bounded hardware staging memory
         while not wire_queue.empty():
             live_block = wire_queue.get_nowait()
             driver_state = driver_state.load_to_hardware_ring(live_block)
             wire_queue.task_done()
 
-        # 2. Match global pointer positioning
         telemetry = StatorGovernor.analyze_step(step)
 
-        # 3. Handle zero-preemption handshake logic
-        if step == 5000:
-            driver_state = replace(driver_state, buffer_req=False, buffer_ack=False)
-        elif step == 5001:
-            if len(driver_state.hardware_stage) > 0:
+        # Dynamic Handshake State Machine driven by Wave Pressure
+        if telemetry.egress_gate_open:
+            if not handshake_in_progress and len(driver_state.hardware_stage) > 0:
+                # 1. Low pressure triggers REQ
                 driver_state = replace(driver_state, buffer_req=True, buffer_ack=False)
-        elif step == 5002:
-            if driver_state.buffer_req:
-                # O(N) conversion is avoided here because we extract as a static list
+                handshake_in_progress = True
+            elif driver_state.buffer_req and not driver_state.buffer_ack:
+                # 2. Sequential step in low pressure executes ACK and flash dumps the ring
                 flushed_blocks = list(driver_state.hardware_stage)
-                driver_state.hardware_stage.clear() # Flash wipe memory slots in one instruction
+                driver_state.hardware_stage.clear()
                 
                 driver_state = replace(
                     driver_state,
@@ -41,19 +40,17 @@ async def async_stator_consumer_core(wire_queue: asyncio.Queue, stop_event: asyn
                     buffer_ack=True,
                     total_processed=driver_state.total_processed + len(flushed_blocks)
                 )
+                logger.info(
+                    f"[HARMONIC FLUSH] Step {step:>5} | Ptr: {telemetry.global_pointer:.4f} | "
+                    f"Cleared {len(flushed_blocks)} blocks at zero-crossing root."
+                )
+        else:
+            # 3. Pressure rises, tearing down the handshake lines for the next cycle
+            if handshake_in_progress:
+                driver_state = replace(driver_state, buffer_req=False, buffer_ack=False)
+                handshake_in_progress = False
 
-        # 4. Report status metrics at critical checkpoints
-        if step in milestones:
-            logger.info(
-                f"Step: {step:>5} | Ptr: {telemetry.global_pointer:.4f} | "
-                f"Wave Pressure: {telemetry.local_pressure:.4f} | "
-                f"NIC Ring: {len(driver_state.hardware_stage)} psk | "
-                f"REQ: {int(driver_state.buffer_req)} ACK: {int(driver_state.buffer_ack)} | "
-                f"Master Bank: {len(driver_state.master_storage_bank)}"
-            )
-            if step == 5002 and driver_state.buffer_ack:
-                logger.info(" [FLASH DUMP EVENT] Hardware ring cleared into master array safely.")
-
+        # Fixed yield window for asynchronous pipeline coordination
         await asyncio.sleep(0.00001)
 
     stop_event.set()
