@@ -25,23 +25,17 @@ class StatorGovernor:
         else:
             block = "Block_C"
 
-        egress_gate_open = False
-        if macro_step in (5000, 5001, 5002):
-            egress_gate_open = True
-            if macro_step == 5000:
-                pressure = 0.0
-            else:
-                pressure = 0.0007 if macro_step == 5001 else 0.0014
-        elif macro_step == 10000:
-            pressure = 0.0
-        else:
-            base_wave = math.sin(pointer * math.pi * 3)
-            pressure = round(abs(base_wave * cls.PHI_GEARS[block]), 4)
+        # Harmonic Wave: Crosses zero naturally every 0.2500 pointer increments
+        # Roots occur at pointer = 0.0, 0.25, 0.5, 0.75, 1.0
+        base_wave = math.sin(pointer * math.pi * 4)
+        pressure = round(abs(base_wave * cls.PHI_GEARS[block]), 4)
+
+        # The egress gate opens automatically when pressure approaches absolute zero
+        egress_gate_open = pressure <= 0.0150
 
         return StatorTelemetry(
             macro_step=macro_step,
             global_pointer=pointer,
             local_pressure=pressure,
             egress_gate_open=egress_gate_open
-          )
-      
+        )
