@@ -13,13 +13,16 @@ async def async_stator_consumer_core(wire_queue: asyncio.Queue, stop_event: asyn
     milestones = {1, 2500, 3334, 4999, 5000, 5001, 5002, 6667, 10000}
     
     for step in range(1, 10001):
+        # 1. Drain the asynchronous pipeline queue into bounded hardware staging memory
         while not wire_queue.empty():
             live_block = wire_queue.get_nowait()
             driver_state = driver_state.load_to_hardware_ring(live_block)
             wire_queue.task_done()
 
+        # 2. Match global pointer positioning
         telemetry = StatorGovernor.analyze_step(step)
 
+        # 3. Handle zero-preemption handshake logic
         if step == 5000:
             driver_state = replace(driver_state, buffer_req=False, buffer_ack=False)
         elif step == 5001:
@@ -27,16 +30,19 @@ async def async_stator_consumer_core(wire_queue: asyncio.Queue, stop_event: asyn
                 driver_state = replace(driver_state, buffer_req=True, buffer_ack=False)
         elif step == 5002:
             if driver_state.buffer_req:
-                flushed_blocks = driver_state.hardware_stage
+                # O(N) conversion is avoided here because we extract as a static list
+                flushed_blocks = list(driver_state.hardware_stage)
+                driver_state.hardware_stage.clear() # Flash wipe memory slots in one instruction
+                
                 driver_state = replace(
                     driver_state,
-                    hardware_stage=[],
                     master_storage_bank=driver_state.master_storage_bank + flushed_blocks,
                     buffer_req=True,
                     buffer_ack=True,
                     total_processed=driver_state.total_processed + len(flushed_blocks)
                 )
 
+        # 4. Report status metrics at critical checkpoints
         if step in milestones:
             logger.info(
                 f"Step: {step:>5} | Ptr: {telemetry.global_pointer:.4f} | "
@@ -52,5 +58,5 @@ async def async_stator_consumer_core(wire_queue: asyncio.Queue, stop_event: asyn
 
     stop_event.set()
     stats["total_processed"] = driver_state.total_processed
+    stats["total_dropped"] = driver_state.total_dropped
     stats["master_bank_snapshot"] = driver_state.master_storage_bank
-              
